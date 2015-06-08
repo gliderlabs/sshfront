@@ -22,6 +22,7 @@ import (
 	"github.com/flynn/go-shlex"
 )
 
+var host = flag.String("h", "", "host ip to listen on")
 var port = flag.String("p", "22", "port to listen on")
 var debug = flag.Bool("d", false, "debug mode displays handler output")
 var env = flag.Bool("e", false, "pass environment to handlers")
@@ -206,7 +207,7 @@ func main() {
 	if p := os.Getenv("PORT"); p != "" && *port == "22" {
 		*port = p
 	}
-	listener, err := net.Listen("tcp", ":"+*port)
+	listener, err := net.Listen("tcp", *host+":"+*port)
 	if err != nil {
 		log.Fatalln("Failed to listen for connections:", err)
 	}
