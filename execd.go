@@ -20,6 +20,7 @@ import (
 
 	"code.google.com/p/go.crypto/ssh"
 	"github.com/flynn/go-shlex"
+	"github.com/kr/pty"
 )
 
 var host = flag.String("h", "", "host ip to listen on")
@@ -49,7 +50,7 @@ func exitStatus(err error) (exitStatusMsg, error) {
 	return exitStatusMsg{0}, nil
 }
 
-func attachCmd(cmd *exec.Cmd, stdout, stderr io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
+func attachCmd(cmd *exec.Cmd, stdout io.Writer, stderr io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -61,6 +62,7 @@ func attachCmd(cmd *exec.Cmd, stdout, stderr io.Writer, stdin io.Reader) (*sync.
 		go func() {
 			io.Copy(stdinIn, stdin)
 			stdinIn.Close()
+			// FIXME: Do we care that this is not part of the WaitGroup?
 		}()
 	}
 
@@ -79,6 +81,27 @@ func attachCmd(cmd *exec.Cmd, stdout, stderr io.Writer, stdin io.Reader) (*sync.
 	}
 	go func() {
 		io.Copy(stderr, stderrOut)
+		wg.Done()
+	}()
+
+	return &wg, nil
+}
+
+func attachShell(cmd *exec.Cmd, ch ssh.Channel) (*sync.WaitGroup, error) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Note that pty merges stdout and stderr.
+	cmdPty, err := pty.Start(cmd)
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		io.Copy(ch, cmdPty)
+		wg.Done()
+	}()
+	go func() {
+		io.Copy(cmdPty, ch)
 		wg.Done()
 	}()
 
@@ -248,18 +271,30 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 		return
 	}
 	defer ch.Close()
+
+	assert := func(at string, err error) bool {
+		if err != nil {
+			log.Printf("%s failed: %s", at, err)
+			ch.Stderr().Write([]byte("Internal error.\n"))
+			return true
+		}
+		return false
+	}
+
+	var stdout, stderr io.Writer
+	if *debug {
+		stdout = io.MultiWriter(ch, os.Stdout)
+		stderr = io.MultiWriter(ch.Stderr(), os.Stdout)
+	} else {
+		stdout = ch
+		stderr = ch.Stderr()
+	}
+
+	// FIXME: We currently bail out as soon as a req is matched. Technically ssh
+	// can send multiple requests out of band, which we might want to handle?
 	for req := range reqs {
 		switch req.Type {
 		case "exec":
-			assert := func(at string, err error) bool {
-				if err != nil {
-					log.Printf("%s failed: %s", at, err)
-					ch.Stderr().Write([]byte("Internal error.\n"))
-					return true
-				}
-				return false
-			}
-
 			if req.WantReply {
 				req.Reply(true, nil)
 			}
@@ -287,14 +322,6 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
 			}
 			cmd.Env = append(cmd.Env, "SSH_ORIGINAL_COMMAND="+cmdline)
-			var stdout, stderr io.Writer
-			if *debug {
-				stdout = io.MultiWriter(ch, os.Stdout)
-				stderr = io.MultiWriter(ch.Stderr(), os.Stdout)
-			} else {
-				stdout = ch
-				stderr = ch.Stderr()
-			}
 			done, err := attachCmd(cmd, stdout, stderr, ch)
 			if assert("attachCmd", err) {
 				return
@@ -310,12 +337,38 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 			_, err = ch.SendRequest("exit-status", false, ssh.Marshal(&status))
 			assert("sendExit", err)
 			return
-		case "env":
-			if req.WantReply {
-				req.Reply(true, nil)
+		case "pty-req":
+			// TODO: Handle "shell" which technically comes after "pty-req".
+			// TODO: Handle "window-change" for pty
+			// TODO: Parse payload to set initial window dimensions
+			// XXX: Obey handler
+			cmd := exec.Command("/usr/local/bin/bash")
+			if !*env {
+				cmd.Env = []string{}
 			}
-		default:
+			if conn.Permissions != nil {
+				// Using Permissions.Extensions as a way to get state from PublicKeyCallback
+				if conn.Permissions.Extensions["environ"] != "" {
+					cmd.Env = append(cmd.Env, strings.Split(conn.Permissions.Extensions["environ"], "\n")...)
+				}
+				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
+			}
+			// TODO: Pass in stdout/stdin to support our mitm'ing above
+			done, err := attachShell(cmd, ch)
+			if assert("attachShell", err) {
+				return
+			}
+			done.Wait()
+			_, err = exitStatus(cmd.Wait())
+			if assert("exitStatus", err) {
+				return
+			}
+			// FIXME: Do we want to send anything back before closing?
 			return
+		}
+
+		if req.WantReply {
+			req.Reply(true, nil)
 		}
 	}
 }
