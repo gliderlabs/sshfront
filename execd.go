@@ -87,14 +87,14 @@ func attachCmd(cmd *exec.Cmd, stdout io.Writer, stderr io.Writer, stdin io.Reade
 	return &wg, nil
 }
 
-func attachShell(cmd *exec.Cmd, stdout io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
+func attachShell(cmd *exec.Cmd, stdout io.Writer, stdin io.Reader) (*os.File, *sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	// Note that pty merges stdout and stderr.
 	cmdPty, err := pty.Start(cmd)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	go func() {
 		io.Copy(stdout, cmdPty)
@@ -105,7 +105,7 @@ func attachShell(cmd *exec.Cmd, stdout io.Writer, stdin io.Reader) (*sync.WaitGr
 		wg.Done()
 	}()
 
-	return &wg, nil
+	return cmdPty, &wg, nil
 }
 
 func addKey(conf *ssh.ServerConfig, block *pem.Block) (err error) {
@@ -270,7 +270,6 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 		log.Println("newChan.Accept failed:", err)
 		return
 	}
-	defer ch.Close()
 
 	assert := func(at string, err error) bool {
 		if err != nil {
@@ -290,11 +289,13 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 		stderr = ch.Stderr()
 	}
 
-	// FIXME: We currently bail out as soon as a req is matched. Technically ssh
-	// can send multiple requests out of band, which we might want to handle?
+	var ptyShell *os.File
+
 	for req := range reqs {
 		switch req.Type {
 		case "exec":
+			defer ch.Close()
+
 			if req.WantReply {
 				req.Reply(true, nil)
 			}
@@ -338,9 +339,8 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 			assert("sendExit", err)
 			return
 		case "pty-req":
-			// TODO: Handle "shell" which technically comes after "pty-req".
-			// TODO: Handle "window-change" for pty
-			// TODO: Parse payload to set initial window dimensions
+			width, height, okSize := parsePtyRequest(req.Payload)
+
 			var cmd *exec.Cmd
 			if *shell {
 				cmd = exec.Command(os.Getenv("SHELL"))
@@ -357,17 +357,29 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 				}
 				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
 			}
-			done, err := attachShell(cmd, stdout, ch)
+			ptyShell, _, err := attachShell(cmd, stdout, ch)
 			if assert("attachShell", err) {
+				ch.Close()
 				return
 			}
-			done.Wait()
-			_, err = exitStatus(cmd.Wait())
-			if assert("exitStatus", err) {
-				return
+			if okSize {
+				setWinsize(ptyShell.Fd(), width, height)
+				req.Reply(true, nil)
 			}
-			// FIXME: Do we want to send anything back before closing?
-			return
+
+			go func() {
+				status, err := exitStatus(cmd.Wait())
+				if !assert("exitStatus", err) {
+					_, err := ch.SendRequest("exit-status", false, ssh.Marshal(&status))
+					assert("sendExit", err)
+				}
+				ch.Close()
+			}()
+		case "window-change":
+			width, height, okSize := parsePtyRequest(req.Payload)
+			if okSize {
+				setWinsize(ptyShell.Fd(), width, height)
+			}
 		}
 
 		if req.WantReply {
