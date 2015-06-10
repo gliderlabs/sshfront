@@ -87,7 +87,7 @@ func attachCmd(cmd *exec.Cmd, stdout io.Writer, stderr io.Writer, stdin io.Reade
 	return &wg, nil
 }
 
-func attachShell(cmd *exec.Cmd, ch ssh.Channel) (*sync.WaitGroup, error) {
+func attachShell(cmd *exec.Cmd, stdout io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -97,11 +97,11 @@ func attachShell(cmd *exec.Cmd, ch ssh.Channel) (*sync.WaitGroup, error) {
 		return nil, err
 	}
 	go func() {
-		io.Copy(ch, cmdPty)
+		io.Copy(stdout, cmdPty)
 		wg.Done()
 	}()
 	go func() {
-		io.Copy(cmdPty, ch)
+		io.Copy(cmdPty, stdin)
 		wg.Done()
 	}()
 
@@ -357,8 +357,7 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 				}
 				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
 			}
-			// TODO: Pass in stdout/stdin to support our mitm'ing above
-			done, err := attachShell(cmd, ch)
+			done, err := attachShell(cmd, stdout, ch)
 			if assert("attachShell", err) {
 				return
 			}
