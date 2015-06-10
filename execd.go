@@ -341,8 +341,12 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 			// TODO: Handle "shell" which technically comes after "pty-req".
 			// TODO: Handle "window-change" for pty
 			// TODO: Parse payload to set initial window dimensions
-			// XXX: Obey handler
-			cmd := exec.Command("/usr/local/bin/bash")
+			var cmd *exec.Cmd
+			if *shell {
+				cmd = exec.Command(os.Getenv("SHELL"))
+			} else {
+				cmd = exec.Command(execHandler[0], execHandler[1:]...)
+			}
 			if !*env {
 				cmd.Env = []string{}
 			}
