@@ -312,7 +312,9 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 				}
 				cmd = exec.Command(execHandler[0], append(execHandler[1:], cmdargs...)...)
 			}
-			if !*env {
+			if *env {
+				cmd.Env = os.Environ()
+			} else {
 				cmd.Env = []string{}
 			}
 			if conn.Permissions != nil {
@@ -347,7 +349,9 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 			} else {
 				cmd = exec.Command(execHandler[0], execHandler[1:]...)
 			}
-			if !*env {
+			if *env {
+				cmd.Env = os.Environ()
+			} else {
 				cmd.Env = []string{}
 			}
 			if conn.Permissions != nil {
