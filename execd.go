@@ -20,6 +20,7 @@ import (
 
 	"code.google.com/p/go.crypto/ssh"
 	"github.com/flynn/go-shlex"
+	"github.com/kr/pty"
 )
 
 var host = flag.String("h", "", "host ip to listen on")
@@ -49,7 +50,7 @@ func exitStatus(err error) (exitStatusMsg, error) {
 	return exitStatusMsg{0}, nil
 }
 
-func attachCmd(cmd *exec.Cmd, stdout, stderr io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
+func attachCmd(cmd *exec.Cmd, stdout io.Writer, stderr io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -61,6 +62,7 @@ func attachCmd(cmd *exec.Cmd, stdout, stderr io.Writer, stdin io.Reader) (*sync.
 		go func() {
 			io.Copy(stdinIn, stdin)
 			stdinIn.Close()
+			// FIXME: Do we care that this is not part of the WaitGroup?
 		}()
 	}
 
@@ -83,6 +85,27 @@ func attachCmd(cmd *exec.Cmd, stdout, stderr io.Writer, stdin io.Reader) (*sync.
 	}()
 
 	return &wg, nil
+}
+
+func attachShell(cmd *exec.Cmd, stdout io.Writer, stdin io.Reader) (*os.File, *sync.WaitGroup, error) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// Note that pty merges stdout and stderr.
+	cmdPty, err := pty.Start(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	go func() {
+		io.Copy(stdout, cmdPty)
+		wg.Done()
+	}()
+	go func() {
+		io.Copy(cmdPty, stdin)
+		wg.Done()
+	}()
+
+	return cmdPty, &wg, nil
 }
 
 func addKey(conf *ssh.ServerConfig, block *pem.Block) (err error) {
@@ -247,18 +270,31 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 		log.Println("newChan.Accept failed:", err)
 		return
 	}
-	defer ch.Close()
+
+	assert := func(at string, err error) bool {
+		if err != nil {
+			log.Printf("%s failed: %s", at, err)
+			ch.Stderr().Write([]byte("Internal error.\n"))
+			return true
+		}
+		return false
+	}
+
+	var stdout, stderr io.Writer
+	if *debug {
+		stdout = io.MultiWriter(ch, os.Stdout)
+		stderr = io.MultiWriter(ch.Stderr(), os.Stdout)
+	} else {
+		stdout = ch
+		stderr = ch.Stderr()
+	}
+
+	var ptyShell *os.File
+
 	for req := range reqs {
 		switch req.Type {
 		case "exec":
-			assert := func(at string, err error) bool {
-				if err != nil {
-					log.Printf("%s failed: %s", at, err)
-					ch.Stderr().Write([]byte("Internal error.\n"))
-					return true
-				}
-				return false
-			}
+			defer ch.Close()
 
 			if req.WantReply {
 				req.Reply(true, nil)
@@ -287,14 +323,6 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
 			}
 			cmd.Env = append(cmd.Env, "SSH_ORIGINAL_COMMAND="+cmdline)
-			var stdout, stderr io.Writer
-			if *debug {
-				stdout = io.MultiWriter(ch, os.Stdout)
-				stderr = io.MultiWriter(ch.Stderr(), os.Stdout)
-			} else {
-				stdout = ch
-				stderr = ch.Stderr()
-			}
 			done, err := attachCmd(cmd, stdout, stderr, ch)
 			if assert("attachCmd", err) {
 				return
@@ -310,12 +338,52 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 			_, err = ch.SendRequest("exit-status", false, ssh.Marshal(&status))
 			assert("sendExit", err)
 			return
-		case "env":
-			if req.WantReply {
+		case "pty-req":
+			width, height, okSize := parsePtyRequest(req.Payload)
+
+			var cmd *exec.Cmd
+			if *shell {
+				cmd = exec.Command(os.Getenv("SHELL"))
+			} else {
+				cmd = exec.Command(execHandler[0], execHandler[1:]...)
+			}
+			if !*env {
+				cmd.Env = []string{}
+			}
+			if conn.Permissions != nil {
+				// Using Permissions.Extensions as a way to get state from PublicKeyCallback
+				if conn.Permissions.Extensions["environ"] != "" {
+					cmd.Env = append(cmd.Env, strings.Split(conn.Permissions.Extensions["environ"], "\n")...)
+				}
+				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
+			}
+			ptyShell, _, err := attachShell(cmd, stdout, ch)
+			if assert("attachShell", err) {
+				ch.Close()
+				return
+			}
+			if okSize {
+				setWinsize(ptyShell.Fd(), width, height)
 				req.Reply(true, nil)
 			}
-		default:
-			return
+
+			go func() {
+				status, err := exitStatus(cmd.Wait())
+				if !assert("exitStatus", err) {
+					_, err := ch.SendRequest("exit-status", false, ssh.Marshal(&status))
+					assert("sendExit", err)
+				}
+				ch.Close()
+			}()
+		case "window-change":
+			width, height, okSize := parsePtyRequest(req.Payload)
+			if okSize {
+				setWinsize(ptyShell.Fd(), width, height)
+			}
+		}
+
+		if req.WantReply {
+			req.Reply(true, nil)
 		}
 	}
 }
