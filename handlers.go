@@ -89,7 +89,6 @@ func (h *sshHandler) Exit(err error) error {
 }
 
 func (h *sshHandler) Request(req *ssh.Request) {
-	// TODO: Add mutex?
 	switch req.Type {
 	case "exec":
 		h.handleExec(req)

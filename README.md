@@ -44,7 +44,7 @@ client$ ssh $SERVER "hello world"
 hello world
 ```
 
-Echo host's environment to clients
+Echo host's environment to clients (with accept-all auth):
 
 ```
 server$ execd -e $(which true) $(env)
