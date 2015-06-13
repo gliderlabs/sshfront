@@ -50,43 +50,6 @@ func exitStatus(err error) (exitStatusMsg, error) {
 	return exitStatusMsg{0}, nil
 }
 
-func attachCmd(cmd *exec.Cmd, stdout io.Writer, stderr io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	if stdin != nil {
-		stdinIn, err := cmd.StdinPipe()
-		if err != nil {
-			return nil, err
-		}
-		go func() {
-			io.Copy(stdinIn, stdin)
-			stdinIn.Close()
-			// FIXME: Do we care that this is not part of the WaitGroup?
-		}()
-	}
-
-	stdoutOut, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		io.Copy(stdout, stdoutOut)
-		wg.Done()
-	}()
-
-	stderrOut, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		io.Copy(stderr, stderrOut)
-		wg.Done()
-	}()
-
-	return &wg, nil
-}
-
 func attachShell(cmd *exec.Cmd, stdout io.Writer, stdin io.Reader) (*os.File, *sync.WaitGroup, error) {
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -150,16 +113,13 @@ func parseKeys(conf *ssh.ServerConfig, pemData []byte) error {
 }
 
 func handleAuth(handler []string, conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	var output bytes.Buffer
+
 	keydata := string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(key)))
 	cmd := exec.Command(handler[0], append(handler[1:], conn.User(), keydata)...)
-	var output bytes.Buffer
-	done, err := attachCmd(cmd, &output, &output, nil)
-	if err != nil {
-		return nil, err
-	}
-	err = cmd.Run()
-	done.Wait()
-	status, err := exitStatus(err)
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	status, err := exitStatus(cmd.Run())
 	if err != nil {
 		return nil, err
 	}
@@ -294,8 +254,6 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 	for req := range reqs {
 		switch req.Type {
 		case "exec":
-			defer ch.Close()
-
 			if req.WantReply {
 				req.Reply(true, nil)
 			}
@@ -308,6 +266,7 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 			} else {
 				cmdargs, err := shlex.Split(cmdline)
 				if assert("shlex.Split", err) {
+					ch.Close()
 					return
 				}
 				cmd = exec.Command(execHandler[0], append(execHandler[1:], cmdargs...)...)
@@ -325,21 +284,26 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
 			}
 			cmd.Env = append(cmd.Env, "SSH_ORIGINAL_COMMAND="+cmdline)
-			done, err := attachCmd(cmd, stdout, stderr, ch)
-			if assert("attachCmd", err) {
+
+			// cmd.Wait closes the stdin when it's done, so we need to proxy it through a pipe
+			stdinPipe, err := cmd.StdinPipe()
+			if assert("cmd.StdinPipe", err) {
+				ch.Close()
 				return
 			}
-			if assert("cmd.Start", cmd.Start()) {
-				return
-			}
-			done.Wait()
-			status, err := exitStatus(cmd.Wait())
-			if assert("exitStatus", err) {
-				return
-			}
-			_, err = ch.SendRequest("exit-status", false, ssh.Marshal(&status))
-			assert("sendExit", err)
-			return
+			go io.Copy(stdinPipe, ch)
+
+			cmd.Stdout = stdout
+			cmd.Stderr = stderr
+
+			go func() {
+				status, err := exitStatus(cmd.Run())
+				if !assert("exec run", err) {
+					_, err := ch.SendRequest("exit-status", false, ssh.Marshal(&status))
+					assert("exec exit", err)
+				}
+				ch.Close()
+			}()
 		case "pty-req":
 			width, height, okSize := parsePtyRequest(req.Payload)
 
@@ -373,9 +337,9 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 
 			go func() {
 				status, err := exitStatus(cmd.Wait())
-				if !assert("exitStatus", err) {
+				if !assert("pty run", err) {
 					_, err := ch.SendRequest("exit-status", false, ssh.Marshal(&status))
-					assert("sendExit", err)
+					assert("pty exit", err)
 				}
 				ch.Close()
 			}()
