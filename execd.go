@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -15,12 +14,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 
-	"code.google.com/p/go.crypto/ssh"
 	"github.com/flynn/go-shlex"
-	"github.com/kr/pty"
+	"golang.org/x/crypto/ssh"
 )
 
 var host = flag.String("h", "", "host ip to listen on")
@@ -48,64 +45,6 @@ func exitStatus(err error) (exitStatusMsg, error) {
 		return exitStatusMsg{0}, err
 	}
 	return exitStatusMsg{0}, nil
-}
-
-func attachCmd(cmd *exec.Cmd, stdout io.Writer, stderr io.Writer, stdin io.Reader) (*sync.WaitGroup, error) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	if stdin != nil {
-		stdinIn, err := cmd.StdinPipe()
-		if err != nil {
-			return nil, err
-		}
-		go func() {
-			io.Copy(stdinIn, stdin)
-			stdinIn.Close()
-			// FIXME: Do we care that this is not part of the WaitGroup?
-		}()
-	}
-
-	stdoutOut, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		io.Copy(stdout, stdoutOut)
-		wg.Done()
-	}()
-
-	stderrOut, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	go func() {
-		io.Copy(stderr, stderrOut)
-		wg.Done()
-	}()
-
-	return &wg, nil
-}
-
-func attachShell(cmd *exec.Cmd, stdout io.Writer, stdin io.Reader) (*os.File, *sync.WaitGroup, error) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Note that pty merges stdout and stderr.
-	cmdPty, err := pty.Start(cmd)
-	if err != nil {
-		return nil, nil, err
-	}
-	go func() {
-		io.Copy(stdout, cmdPty)
-		wg.Done()
-	}()
-	go func() {
-		io.Copy(cmdPty, stdin)
-		wg.Done()
-	}()
-
-	return cmdPty, &wg, nil
 }
 
 func addKey(conf *ssh.ServerConfig, block *pem.Block) (err error) {
@@ -150,16 +89,13 @@ func parseKeys(conf *ssh.ServerConfig, pemData []byte) error {
 }
 
 func handleAuth(handler []string, conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	var output bytes.Buffer
+
 	keydata := string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(key)))
 	cmd := exec.Command(handler[0], append(handler[1:], conn.User(), keydata)...)
-	var output bytes.Buffer
-	done, err := attachCmd(cmd, &output, &output, nil)
-	if err != nil {
-		return nil, err
-	}
-	err = cmd.Run()
-	done.Wait()
-	status, err := exitStatus(err)
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	status, err := exitStatus(cmd.Run())
 	if err != nil {
 		return nil, err
 	}
@@ -261,133 +197,5 @@ func handleConn(conn net.Conn, conf *ssh.ServerConfig, execHandler []string) {
 			continue
 		}
 		go handleChannel(sshConn, ch, execHandler)
-	}
-}
-
-func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []string) {
-	ch, reqs, err := newChan.Accept()
-	if err != nil {
-		log.Println("newChan.Accept failed:", err)
-		return
-	}
-
-	assert := func(at string, err error) bool {
-		if err != nil {
-			log.Printf("%s failed: %s", at, err)
-			ch.Stderr().Write([]byte("Internal error.\n"))
-			return true
-		}
-		return false
-	}
-
-	var stdout, stderr io.Writer
-	if *debug {
-		stdout = io.MultiWriter(ch, os.Stdout)
-		stderr = io.MultiWriter(ch.Stderr(), os.Stdout)
-	} else {
-		stdout = ch
-		stderr = ch.Stderr()
-	}
-
-	var ptyShell *os.File
-
-	for req := range reqs {
-		switch req.Type {
-		case "exec":
-			defer ch.Close()
-
-			if req.WantReply {
-				req.Reply(true, nil)
-			}
-
-			cmdline := string(req.Payload[4:])
-			var cmd *exec.Cmd
-			if *shell {
-				shellcmd := flag.Arg(1) + " " + cmdline
-				cmd = exec.Command(os.Getenv("SHELL"), "-c", shellcmd)
-			} else {
-				cmdargs, err := shlex.Split(cmdline)
-				if assert("shlex.Split", err) {
-					return
-				}
-				cmd = exec.Command(execHandler[0], append(execHandler[1:], cmdargs...)...)
-			}
-			if *env {
-				cmd.Env = os.Environ()
-			} else {
-				cmd.Env = []string{}
-			}
-			if conn.Permissions != nil {
-				// Using Permissions.Extensions as a way to get state from PublicKeyCallback
-				if conn.Permissions.Extensions["environ"] != "" {
-					cmd.Env = append(cmd.Env, strings.Split(conn.Permissions.Extensions["environ"], "\n")...)
-				}
-				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
-			}
-			cmd.Env = append(cmd.Env, "SSH_ORIGINAL_COMMAND="+cmdline)
-			done, err := attachCmd(cmd, stdout, stderr, ch)
-			if assert("attachCmd", err) {
-				return
-			}
-			if assert("cmd.Start", cmd.Start()) {
-				return
-			}
-			done.Wait()
-			status, err := exitStatus(cmd.Wait())
-			if assert("exitStatus", err) {
-				return
-			}
-			_, err = ch.SendRequest("exit-status", false, ssh.Marshal(&status))
-			assert("sendExit", err)
-			return
-		case "pty-req":
-			width, height, okSize := parsePtyRequest(req.Payload)
-
-			var cmd *exec.Cmd
-			if *shell {
-				cmd = exec.Command(os.Getenv("SHELL"))
-			} else {
-				cmd = exec.Command(execHandler[0], execHandler[1:]...)
-			}
-			if *env {
-				cmd.Env = os.Environ()
-			} else {
-				cmd.Env = []string{}
-			}
-			if conn.Permissions != nil {
-				// Using Permissions.Extensions as a way to get state from PublicKeyCallback
-				if conn.Permissions.Extensions["environ"] != "" {
-					cmd.Env = append(cmd.Env, strings.Split(conn.Permissions.Extensions["environ"], "\n")...)
-				}
-				cmd.Env = append(cmd.Env, "USER="+conn.Permissions.Extensions["user"])
-			}
-			ptyShell, _, err := attachShell(cmd, stdout, ch)
-			if assert("attachShell", err) {
-				ch.Close()
-				return
-			}
-			if okSize {
-				setWinsize(ptyShell.Fd(), width, height)
-				req.Reply(true, nil)
-			}
-
-			go func() {
-				status, err := exitStatus(cmd.Wait())
-				if !assert("exitStatus", err) {
-					_, err := ch.SendRequest("exit-status", false, ssh.Marshal(&status))
-					assert("sendExit", err)
-				}
-				ch.Close()
-			}()
-		case "window-change":
-			width, height, okSize := parsePtyRequest(req.Payload)
-			if okSize {
-				setWinsize(ptyShell.Fd(), width, height)
-			}
-		}
-
-		if req.WantReply {
-			req.Reply(true, nil)
-		}
 	}
 }
