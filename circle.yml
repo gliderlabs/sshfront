@@ -1,0 +1,20 @@
+dependencies:
+  pre:
+    - make circleci
+  override:
+    - make deps
+    - make build
+  post:
+    - tar -czvf $CIRCLE_ARTIFACTS/execd-linux.tgz -C build/Linux execd
+    - tar -czvf $CIRCLE_ARTIFACTS/execd-darwin.tgz -C build/Darwin execd
+    - tar -czvf $CIRCLE_ARTIFACTS/go-workspace.tgz -C ~/.go_workspace .
+
+test:
+  override:
+    - /bin/true
+
+deployment:
+  release:
+    branch: release
+    commands:
+      - make release
