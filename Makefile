@@ -31,3 +31,5 @@ circleci:
 		&& mkdir -p /home/ubuntu/.go_workspace/src/github.com/$(OWNER) \
 		&& mv $(NAME) /home/ubuntu/.go_workspace/src/github.com/$(OWNER)/$(NAME) \
 		&& ln -s /home/ubuntu/.go_workspace/src/github.com/$(OWNER)/$(NAME) $(NAME)
+
+.PHONY: build release
