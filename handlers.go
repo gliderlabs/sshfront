@@ -107,7 +107,9 @@ func (h *sshHandler) handleExec(req *ssh.Request) {
 	h.Lock()
 	defer h.Unlock()
 
-	cmdline := string(req.Payload[4:])
+	var payload = struct{ Value string }{}
+	ssh.Unmarshal(req.Payload, &payload)
+	cmdline := payload.Value
 
 	// Initialize Cmd
 	var cmd *exec.Cmd
