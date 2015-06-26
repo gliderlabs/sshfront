@@ -1,6 +1,7 @@
 NAME=sshfront
 OWNER=gliderlabs
 ARCH=$(shell uname -m)
+RMFLAG=--rm
 VERSION=0.2.0
 
 build:
@@ -22,7 +23,7 @@ example: build
 
 test:
 	docker build -t $(NAME)-tests tests
-	docker run --rm \
+	docker run $(RMFLAG) \
 		-v $(PWD)/tests:/tests \
 		-v $(PWD)/build/Linux/sshfront:/bin/sshfront \
 		$(NAME)-tests \
