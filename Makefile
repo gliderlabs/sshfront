@@ -1,13 +1,15 @@
-NAME=execd
-OWNER=progrium
+NAME=sshfront
+OWNER=gliderlabs
 ARCH=$(shell uname -m)
-VERSION=0.1.0
+VERSION=0.2.0
 
 build:
 	mkdir -p build/Linux && GOOS=linux CGO_ENABLED=0 go build -a \
+		-ldflags "-X main.Version $(VERSION)" \
 		-installsuffix cgo \
 		-o build/Linux/$(NAME)
 	mkdir -p build/Darwin && GOOS=darwin CGO_ENABLED=0 go build -a \
+		-ldflags "-X main.Version $(VERSION)" \
 		-installsuffix cgo \
 		-o build/Darwin/$(NAME)
 
@@ -16,7 +18,7 @@ deps:
 	go get || true
 
 example: build
-	./execd -h localhost -p 2022 -k example/host_pk.pem example/authcheck example/helloworld
+	./build/Darwin/sshfront -d -p 2222 -k ~/.ssh/id_rsa example/helloworld
 
 
 release:

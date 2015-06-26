@@ -5,8 +5,8 @@ dependencies:
     - make deps
     - make build
   post:
-    - tar -czvf $CIRCLE_ARTIFACTS/execd-linux.tgz -C build/Linux execd
-    - tar -czvf $CIRCLE_ARTIFACTS/execd-darwin.tgz -C build/Darwin execd
+    - tar -czvf $CIRCLE_ARTIFACTS/sshfront-linux.tgz -C build/Linux sshfront
+    - tar -czvf $CIRCLE_ARTIFACTS/sshfront-darwin.tgz -C build/Darwin sshfront
     - tar -czvf $CIRCLE_ARTIFACTS/go-workspace.tgz -C ~/.go_workspace .
 
 test:

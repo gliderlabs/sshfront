@@ -1,4 +1,6 @@
 #!/bin/bash
-echo "Hello world"
-read hello
-echo "OK: $hello"
+echo "Hello world: $@"
+env
+if [[ -t 1 ]]; then
+  exec bash
+fi

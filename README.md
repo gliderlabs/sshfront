@@ -1,17 +1,17 @@
-# execd
+# sshfront
 
-A very lightweight SSH server frontend written in Go. The backend auth and execution logic is handled by commands you specify, letting you customize its behavior via your own scripts/executables.
+A lightweight SSH server frontend written in Go. Authentication and connections
+are controlled with command handlers / shell scripts.
 
-## Using execd
+## Using sshfront
 ```
-Usage: ./execd [options] <auth-handler> <exec-handler>
+Usage: ./sshfront [options] <handler>
 
   -d=false: debug mode displays handler output
   -e=false: pass environment to handlers
   -k="": pem file of private keys (read from SSH_PRIVATE_KEYS by default)
   -h="": host ip to listen on
   -p="22": port to listen on
-  -s=false: run exec handler via SHELL
 ```
 
 
@@ -39,7 +39,7 @@ exec-handler is the path to an executable that's used to execute the command pro
 Echo server (with accept-all auth):
 
 ```
-server$ execd $(which true) $(which echo)
+server$ sshfront $(which true) $(which echo)
 client$ ssh $SERVER "hello world"
 hello world
 ```
@@ -47,7 +47,7 @@ hello world
 Echo host's environment to clients (with accept-all auth):
 
 ```
-server$ execd -e $(which true) $(env)
+server$ sshfront -e $(which true) $(env)
 client$ ssh $SERVER
 USER=root
 HOME=/root
@@ -58,18 +58,12 @@ LANG=en_US.UTF-8
 Bash server (with accept-all auth):
 
 ```
-server$ execd $(which true) $(which bash)
+server$ sshfront $(which true) $(which bash)
 client$ ssh $SERVER
 bash-4.3$ echo "this is a bash instance running on the server"
 this is a bash instance running on the server
 ```
 
-
-## Credit / History
-
-It started with [gitreceive](https://github.com/progrium/gitreceive), which was then used in [Dokku](https://github.com/progrium/dokku). Then I made a more generalized version of gitreceive, more similar to execd, called [sshcommand](https://github.com/progrium/sshcommand), which eventually replaced gitreceive in Dokku. When I started work on Flynn, the first projects included [gitreceived](https://github.com/flynn/gitreceived) (a standalone daemon version of gitreceive). This was refined by the Flynn community, namely Jonathan Rudenberg. 
-
-Eventually I came to realize gitreceived could be generalized / simplified further in a way that could be used *with* the original gitreceive, *and* replace sshcommand, *and* be used in Dokku, *and* potentially replace gitreceived in Flynn. This project takes learnings from all those projects, though mostly gitreceived.
 
 ## Sponsors
 

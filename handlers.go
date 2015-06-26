@@ -1,20 +1,97 @@
 package main
 
 import (
+	"bytes"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/flynn/go-shlex"
 	"github.com/kr/pty"
 	"golang.org/x/crypto/ssh"
 )
 
-func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []string) {
+type exitStatusMsg struct {
+	Status uint32
+}
+
+func exitStatus(err error) (exitStatusMsg, error) {
+	if err != nil {
+		if exiterr, ok := err.(*exec.ExitError); ok {
+			// There is no platform independent way to retrieve
+			// the exit code, but the following will work on Unix
+			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
+				return exitStatusMsg{uint32(status.ExitStatus())}, nil
+			}
+		}
+		return exitStatusMsg{0}, err
+	}
+	return exitStatusMsg{0}, nil
+}
+
+func handlerCmd(handler string, appendArgs ...string) (*exec.Cmd, error) {
+	handlerSplit, err := shlex.Split(handler)
+	if err != nil {
+		return nil, err
+	}
+	var args []string
+	executable := handlerSplit[0]
+	if len(handlerSplit) > 1 {
+		args = handlerSplit[1:]
+	}
+	path, err := exec.LookPath(executable)
+	if err == nil {
+		executable = path
+	}
+	execPath, err := filepath.Abs(executable)
+	if err != nil {
+		return nil, fmt.Errorf("unable to locate handler: %s", executable)
+	}
+	return exec.Command(execPath, append(args, appendArgs...)...), nil
+}
+
+func handleAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	if *authHook == "" {
+		// allow all
+		return &ssh.Permissions{
+			Extensions: map[string]string{
+				"user": conn.User(),
+			},
+		}, nil
+	}
+
+	keydata := string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(key)))
+	cmd, err := handlerCmd(*authHook, conn.User(), keydata)
+	if err != nil {
+		return nil, err
+	}
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	status, err := exitStatus(cmd.Run())
+	if err != nil {
+		return nil, err
+	}
+	if status.Status == 0 {
+		return &ssh.Permissions{
+			Extensions: map[string]string{
+				"environ": strings.Trim(output.String(), "\n"),
+				"user":    conn.User(),
+			},
+		}, nil
+	}
+	debug("authentication hook status:", status.Status)
+	return nil, fmt.Errorf("authentication failed")
+}
+
+func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		log.Println("newChan.Accept failed:", err)
@@ -23,7 +100,7 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 
 	// Setup stdout/stderr
 	var stdout, stderr io.Writer
-	if *debug {
+	if *debugMode {
 		stdout = io.MultiWriter(ch, os.Stdout)
 		stderr = io.MultiWriter(ch.Stderr(), os.Stdout)
 	} else {
@@ -32,14 +109,13 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 	}
 
 	handler := sshHandler{
-		ExecHandler: execHandler,
-		channel:     ch,
-		stdout:      stdout,
-		stderr:      stderr,
+		channel: ch,
+		stdout:  stdout,
+		stderr:  stderr,
 	}
 
 	// Load default environment
-	if *env {
+	if *useEnv {
 		handler.Env = os.Environ()
 	}
 	if conn.Permissions != nil {
@@ -58,15 +134,14 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel, execHandler []s
 // sshHandler is a stateful handler for requests within an SSH channel
 type sshHandler struct {
 	sync.Mutex
-	Env         []string
-	ExecHandler []string
-	channel     ssh.Channel
-	stdout      io.Writer
-	stderr      io.Writer
-	ptyShell    *os.File
+	Env      []string
+	channel  ssh.Channel
+	stdout   io.Writer
+	stderr   io.Writer
+	ptyShell *os.File
 }
 
-func (h sshHandler) assert(at string, err error) bool {
+func (h *sshHandler) assert(at string, err error) bool {
 	if err != nil {
 		log.Printf("%s failed: %s", at, err)
 		h.stderr.Write([]byte("Internal error.\n"))
@@ -109,23 +184,20 @@ func (h *sshHandler) handleExec(req *ssh.Request) {
 
 	var payload = struct{ Value string }{}
 	ssh.Unmarshal(req.Payload, &payload)
-	cmdline := payload.Value
-
-	// Initialize Cmd
-	var cmd *exec.Cmd
-	if *shell {
-		shellcmd := flag.Arg(1) + " " + cmdline
-		cmd = exec.Command(os.Getenv("SHELL"), "-c", shellcmd)
-	} else {
-		cmdargs, err := shlex.Split(cmdline)
-		if h.assert("exec shlex.Split", err) {
-			h.channel.Close()
-			return
-		}
-		cmd = exec.Command(h.ExecHandler[0], append(h.ExecHandler[1:], cmdargs...)...)
+	cmdargs, err := shlex.Split(payload.Value)
+	if err != nil {
+		debug("failed exec split:", err)
+		h.channel.Close()
+		return
 	}
 
-	cmd.Env = append(h.Env, "SSH_ORIGINAL_COMMAND="+cmdline)
+	cmd, err := handlerCmd(flag.Arg(0), cmdargs...)
+	if err != nil {
+		debug("failed handler init:", err)
+		h.channel.Close()
+		return
+	}
+	cmd.Env = append(h.Env, "SSH_ORIGINAL_COMMAND="+strings.Join(cmdargs, " "))
 	cmd.Stdout = h.stdout
 	cmd.Stderr = h.stderr
 
@@ -157,12 +229,11 @@ func (h *sshHandler) handlePty(req *ssh.Request) {
 
 	width, height, okSize := parsePtyRequest(req.Payload)
 
-	// Initialize Cmd
-	var cmd *exec.Cmd
-	if *shell {
-		cmd = exec.Command(os.Getenv("SHELL"))
-	} else {
-		cmd = exec.Command(h.ExecHandler[0], h.ExecHandler[1:]...)
+	cmd, err := handlerCmd(flag.Arg(0))
+	if err != nil {
+		debug("failed handler init:", err)
+		h.channel.Close()
+		return
 	}
 	cmd.Env = h.Env
 
@@ -185,7 +256,7 @@ func (h *sshHandler) handlePty(req *ssh.Request) {
 	go h.Exit(cmd.Wait())
 }
 
-func (h sshHandler) handleWinch(req *ssh.Request) {
+func (h *sshHandler) handleWinch(req *ssh.Request) {
 	h.Lock()
 	defer h.Unlock()
 
