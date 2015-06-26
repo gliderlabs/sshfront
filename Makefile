@@ -20,6 +20,13 @@ deps:
 example: build
 	./build/Darwin/sshfront -d -p 2222 -k ~/.ssh/id_rsa example/helloworld
 
+test:
+	docker build -t $(NAME)-tests tests
+	docker run --rm \
+		-v $(PWD)/tests:/tests \
+		-v $(PWD)/build/Linux/sshfront:/bin/sshfront \
+		$(NAME)-tests \
+		basht /tests/*.bash
 
 release:
 	rm -rf release && mkdir release
