@@ -163,10 +163,16 @@ func (h *sshHandler) Exit(err error) error {
 	return err
 }
 
+type EnvVar struct {
+	Name, Value string
+}
+
 func (h *sshHandler) Request(req *ssh.Request) {
 	switch req.Type {
 	case "exec":
 		h.handleExec(req)
+	case "env":
+		h.handleEnv(req)
 	case "pty-req":
 		h.handlePty(req)
 	case "window-change":
@@ -176,6 +182,14 @@ func (h *sshHandler) Request(req *ssh.Request) {
 			req.Reply(true, nil)
 		}
 	}
+}
+
+func (h *sshHandler) handleEnv(req *ssh.Request) {
+	var pair EnvVar
+	ssh.Unmarshal(req.Payload, &pair)
+	envvar := fmt.Sprintf("%s=%s", pair.Name, pair.Value)
+	h.Env = append(h.Env, envvar)
+	req.Reply(true, nil)
 }
 
 func (h *sshHandler) handleExec(req *ssh.Request) {
