@@ -77,3 +77,4 @@ This project was made possible thanks to [Deis](http://deis.io) and [DigitalOcea
 ## License
 
 MIT
+<img src="https://ga-beacon.appspot.com/UA-58928488-2/sshfront/readme?pixel" />
