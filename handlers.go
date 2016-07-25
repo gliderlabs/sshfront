@@ -221,7 +221,10 @@ func (h *sshHandler) handleExec(req *ssh.Request) {
 		h.channel.Close()
 		return
 	}
-	go io.Copy(stdinPipe, h.channel)
+	go func() {
+		defer stdinPipe.Close()
+		io.Copy(stdinPipe, h.channel)
+	}()
 
 	if req.WantReply {
 		req.Reply(true, nil)
