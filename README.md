@@ -1,5 +1,8 @@
 # sshfront
 
+[![CircleCI](https://img.shields.io/circleci/project/gliderlabs/sshfront/release.svg)](https://circleci.com/gh/gliderlabs/sshfront)
+[![IRC Channel](https://img.shields.io/badge/irc-%23gliderlabs-blue.svg)](https://kiwiirc.com/client/irc.freenode.net/#gliderlabs)
+
 A lightweight SSH server frontend where authentication and connections
 are controlled with command handlers / shell scripts.
 
@@ -74,3 +77,4 @@ This project was made possible thanks to [Deis](http://deis.io) and [DigitalOcea
 ## License
 
 MIT
+<img src="https://ga-beacon.appspot.com/UA-58928488-2/sshfront/readme?pixel" />
