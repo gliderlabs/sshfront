@@ -4,15 +4,19 @@ ARCH=$(shell uname -m)
 RMFLAG=--rm
 VERSION=0.2.1
 
-build:
+build/Linux/sshfront:
 	mkdir -p build/Linux && GOOS=linux CGO_ENABLED=0 go build -a \
 		-ldflags "-X main.Version=$(VERSION)" \
 		-installsuffix cgo \
 		-o build/Linux/$(NAME) ./cmd/sshfront
+
+build/Darwin/sshfront:
 	mkdir -p build/Darwin && GOOS=darwin CGO_ENABLED=0 go build -a \
 		-ldflags "-X main.Version=$(VERSION)" \
 		-installsuffix cgo \
 		-o build/Darwin/$(NAME) ./cmd/sshfront
+
+build: build/Linux/sshfront build/Darwin/sshfront
 
 deps:
 	go get -u github.com/progrium/gh-release/...
