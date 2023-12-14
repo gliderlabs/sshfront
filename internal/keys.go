@@ -1,4 +1,4 @@
-package main
+package internal
 
 import (
 	"crypto/rand"
@@ -48,7 +48,7 @@ func decodePemBlocks(pemData []byte) []*pem.Block {
 	}
 }
 
-func setupHostKey(config *ssh.ServerConfig) {
+func SetupHostKey(config *ssh.ServerConfig) {
 	var signers []ssh.Signer
 	if keyEnv := os.Getenv("SSH_PRIVATE_KEYS"); keyEnv != "" {
 		for _, block := range decodePemBlocks([]byte(keyEnv)) {
@@ -58,10 +58,10 @@ func setupHostKey(config *ssh.ServerConfig) {
 			}
 		}
 	}
-	if *hostKey != "" {
-		pemBytes, err := ioutil.ReadFile(*hostKey)
+	if *HostKey != "" {
+		pemBytes, err := ioutil.ReadFile(*HostKey)
 		if err != nil {
-			debug("host key file error:", err)
+			Debug("host key file error:", err)
 		}
 		for _, block := range decodePemBlocks(pemBytes) {
 			signer, _ := signerFromBlock(block)
@@ -75,7 +75,7 @@ func setupHostKey(config *ssh.ServerConfig) {
 			config.AddHostKey(signer)
 		}
 	} else {
-		debug("no host key provided, generating host key")
+		Debug("no host key provided, generating host key")
 		key, err := rsa.GenerateKey(rand.Reader, 768)
 		if err != nil {
 			log.Fatalln("failed key generate:", err)

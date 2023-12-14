@@ -8,11 +8,11 @@ build:
 	mkdir -p build/Linux && GOOS=linux CGO_ENABLED=0 go build -a \
 		-ldflags "-X main.Version=$(VERSION)" \
 		-installsuffix cgo \
-		-o build/Linux/$(NAME)
+		-o build/Linux/$(NAME) ./cmd/sshfront
 	mkdir -p build/Darwin && GOOS=darwin CGO_ENABLED=0 go build -a \
 		-ldflags "-X main.Version=$(VERSION)" \
 		-installsuffix cgo \
-		-o build/Darwin/$(NAME)
+		-o build/Darwin/$(NAME) ./cmd/sshfront
 
 deps:
 	go get -u github.com/progrium/gh-release/...

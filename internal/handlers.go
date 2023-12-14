@@ -1,4 +1,4 @@
-package main
+package internal
 
 import (
 	"bytes"
@@ -57,8 +57,8 @@ func handlerCmd(handler string, appendArgs ...string) (*exec.Cmd, error) {
 	return exec.Command(execPath, append(args, appendArgs...)...), nil
 }
 
-func handleAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-	if *authHook == "" {
+func HandleAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+	if *AuthHook == "" {
 		// allow all
 		return &ssh.Permissions{
 			Extensions: map[string]string{
@@ -68,7 +68,7 @@ func handleAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, err
 	}
 
 	keydata := string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(key)))
-	cmd, err := handlerCmd(*authHook, conn.User(), keydata)
+	cmd, err := handlerCmd(*AuthHook, conn.User(), keydata)
 	if err != nil {
 		return nil, err
 	}
@@ -87,11 +87,11 @@ func handleAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, err
 			},
 		}, nil
 	}
-	debug("authentication hook status:", status.Status)
+	Debug("authentication hook status:", status.Status)
 	return nil, fmt.Errorf("authentication failed")
 }
 
-func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel) {
+func HandleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		log.Println("newChan.Accept failed:", err)
@@ -100,7 +100,7 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel) {
 
 	// Setup stdout/stderr
 	var stdout, stderr io.Writer
-	if *debugMode {
+	if *DebugMode {
 		stdout = io.MultiWriter(ch, os.Stdout)
 		stderr = io.MultiWriter(ch.Stderr(), os.Stdout)
 	} else {
@@ -115,7 +115,7 @@ func handleChannel(conn *ssh.ServerConn, newChan ssh.NewChannel) {
 	}
 
 	// Load default environment
-	if *useEnv {
+	if *UseEnv {
 		handler.Env = os.Environ()
 	}
 	if conn.Permissions != nil {
@@ -200,14 +200,14 @@ func (h *sshHandler) handleExec(req *ssh.Request) {
 	ssh.Unmarshal(req.Payload, &payload)
 	cmdargs, err := shlex.Split(payload.Value)
 	if err != nil {
-		debug("failed exec split:", err)
+		Debug("failed exec split:", err)
 		h.channel.Close()
 		return
 	}
 
 	cmd, err := handlerCmd(flag.Arg(0), cmdargs...)
 	if err != nil {
-		debug("failed handler init:", err)
+		Debug("failed handler init:", err)
 		h.channel.Close()
 		return
 	}
@@ -248,7 +248,7 @@ func (h *sshHandler) handlePty(req *ssh.Request) {
 
 	cmd, err := handlerCmd(flag.Arg(0))
 	if err != nil {
-		debug("failed handler init:", err)
+		Debug("failed handler init:", err)
 		h.channel.Close()
 		return
 	}
