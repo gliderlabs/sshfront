@@ -67,8 +67,8 @@ func HandleAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, err
 		}, nil
 	}
 
-	keydata := string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(key)))
-	cmd, err := handlerCmd(*AuthHook, conn.User(), keydata)
+	pubKey := string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(key)))
+	cmd, err := handlerCmd(*AuthHook, conn.User(), pubKey)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +192,8 @@ func (h *sshHandler) handleEnv(req *ssh.Request) {
 	req.Reply(true, nil)
 }
 
+// handleExec when executed a command e.g.
+// ssh user@localhost -p 2222 'echo Hello'
 func (h *sshHandler) handleExec(req *ssh.Request) {
 	h.Lock()
 	defer h.Unlock()
@@ -234,6 +236,8 @@ func (h *sshHandler) handleExec(req *ssh.Request) {
 	h.Exit(cmd.Run())
 }
 
+// handlePty when executed a command e.g.
+// ssh user@localhost -p 2222
 func (h *sshHandler) handlePty(req *ssh.Request) {
 	h.Lock()
 	defer h.Unlock()
@@ -246,7 +250,8 @@ func (h *sshHandler) handlePty(req *ssh.Request) {
 
 	width, height, okSize := parsePtyRequest(req.Payload)
 
-	cmd, err := handlerCmd(flag.Arg(0))
+	scriptName := flag.Arg(0)
+	cmd, err := handlerCmd(scriptName)
 	if err != nil {
 		Debug("failed handler init:", err)
 		h.channel.Close()

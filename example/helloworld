@@ -1,6 +1,8 @@
 #!/bin/bash
-echo "Hello world: $@"
+echo "Execute command: $@"
+echo "Env vars:"
 env
+# if FD = 1 then this is an interactive shell
 if [[ -t 1 ]]; then
   exec bash
 fi

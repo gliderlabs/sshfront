@@ -1,2 +1,3 @@
 #!/bin/bash
+# check that the user's pubkey is authorized
 grep "$2" "/home/$1/.ssh/authorized_keys" > /dev/null 2>&1
