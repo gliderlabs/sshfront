@@ -52,9 +52,9 @@ func main() {
 	}
 	SetupHostKey(config)
 
-	var listenAddr string
-	if listenAddr = os.Getenv("SSHFRONT_LISTEN"); listenAddr == "" {
-		listenAddr = fmt.Sprintf("%s:%s", *ListenHost, *ListenPort)
+	listenAddr := os.Getenv("SSHFRONT_LISTEN")
+	if listenAddr == "" {
+		listenAddr = net.JoinHostPort(*ListenHost, *ListenPort)
 	}
 
 	log.Printf("sshfront v%s listening on %s ...\n", Version, listenAddr)
