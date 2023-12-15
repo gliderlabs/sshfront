@@ -76,7 +76,7 @@ func setupHostKey(config *ssh.ServerConfig) {
 		}
 	} else {
 		debug("no host key provided, generating host key")
-		key, err := rsa.GenerateKey(rand.Reader, 768)
+		key, err := rsa.GenerateKey(rand.Reader, 1024)
 		if err != nil {
 			log.Fatalln("failed key generate:", err)
 		}
