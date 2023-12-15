@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	. "github.com/gliderlabs/sshfront/internal"
 	"log"
 	"net"
 	"os"
@@ -12,36 +13,21 @@ import (
 
 var Version string
 
-var (
-	listenHost = flag.String("h", "0.0.0.0", "ip to listen on")
-	listenPort = flag.String("p", "22", "port to listen on")
-	hostKey    = flag.String("k", "~/.ssh/id_rsa", "private host key path")
-	authHook   = flag.String("a", "", "authentication hook. empty=allow all")
-	debugMode  = flag.Bool("d", false, "debug mode")
-	useEnv     = flag.Bool("e", false, "pass environment to handler")
-)
-
-func debug(v ...interface{}) {
-	if *debugMode {
-		log.Println(v...)
-	}
-}
-
 func handleConn(conn net.Conn, conf *ssh.ServerConfig) {
 	defer conn.Close()
 	sshConn, chans, reqs, err := ssh.NewServerConn(conn, conf)
 	if err != nil {
-		debug("handshake failed:", err)
+		Debug("handshake failed:", err)
 		return
 	}
 	go ssh.DiscardRequests(reqs)
 	for ch := range chans {
 		if ch.ChannelType() != "session" {
 			ch.Reject(ssh.UnknownChannelType, "unsupported channel type")
-			debug("channel rejected, unsupported type:", ch.ChannelType())
+			Debug("channel rejected, unsupported type:", ch.ChannelType())
 			continue
 		}
-		go handleChannel(sshConn, ch)
+		go HandleChannel(sshConn, ch)
 	}
 }
 
@@ -61,14 +47,14 @@ func main() {
 
 	config := &ssh.ServerConfig{
 		PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			return handleAuth(conn, key)
+			return HandleAuth(conn, key)
 		},
 	}
-	setupHostKey(config)
+	SetupHostKey(config)
 
-	var listenAddr string
-	if listenAddr = os.Getenv("SSHFRONT_LISTEN"); listenAddr == "" {
-		listenAddr = fmt.Sprintf("%s:%s", *listenHost, *listenPort)
+	listenAddr := os.Getenv("SSHFRONT_LISTEN")
+	if listenAddr == "" {
+		listenAddr = net.JoinHostPort(*ListenHost, *ListenPort)
 	}
 
 	log.Printf("sshfront v%s listening on %s ...\n", Version, listenAddr)
@@ -80,7 +66,7 @@ func main() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			debug("accept failed:", err)
+			Debug("accept failed:", err)
 			continue
 		}
 		go handleConn(conn, config)
