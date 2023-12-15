@@ -75,6 +75,14 @@ Bash server:
     this is a bash instance running on the server
 
 
+SSH forwarding:
+
+    server$ sshfront example/sshforward
+    client$ ssh alice@$SERVER
+    Forward ssh alice@another.server...
+    Welcome to another.server
+
+
 ## Sponsors
 
 This project was made possible thanks to [Deis](http://deis.io) and [DigitalOcean](http://digitalocean.com).

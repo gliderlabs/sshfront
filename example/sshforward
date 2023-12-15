@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "Forward ssh ${USER}@localhost..."
+ssh "${USER}@localhost"
